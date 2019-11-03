@@ -1,0 +1,273 @@
+syntax = "proto3";
+
+/* Implement a torrent-like system
+
+1. The communication is done using the Google Protobuffer 3.x messages defined below, over TCP. The exchange will be
+   synchronous. When sending a request, open the TCP connection, send the message, get back the response, then close
+   the connection. When listening for requests, send back the response, then close the socket.
+
+2. The system consists of several nodes and one client. Your job is to implement the node. The client will be provided
+   to you by the instructor.
+
+3. The evaluation will be done as follows:
+       - Your laptops will connect to a small wired switch and have predefined static addresses
+       - The instructor's laptop will also be connected to the switch and test your nodes using the client
+       - You will run 3 nodes on your laptop, each on a predefined port
+       - Your nodes will communicate with your colleagues and the instructor's nodes
+       - Initially your nodes will have no data. The instructor's client will upload various files to various nodes,
+         and ask you to replicate locally some of those files. It will also download files form you to make sure they
+         are correct.
+
+4. Node referencing: as all IP addresses are known ahead of time and belong to the same network, and the ports are
+   predefined, the nodes will be referred, for convenience, as <ip-suffix>:<port-offset>. This is not necessarily
+   relevant for your implementation, but it is useful understanding it. See below for beter understanding
+
+5. You should have a configuration of some sort that contains the folowing information
+       - ip-prefix 127.0.0
+       - port-base 5000
+       - ip-suffixes 2 3 4 5 6 7 8 9
+       - port-offsets 1 2 3
+   Using this configuration, you will easly know all the nodes in the network. All this will be given to you during the
+   evaluation, and you should be able to easily apply the configuration to you implementation. Following the convention
+   at point 4, a node reference of 1:3, refers to a node running on host 127.0.0.1 and port 5003. You do not need to use
+   this convention, but the instructor will identify your nodes in this manner. Be prepared to handle nodes that are
+   offline.
+
+   To run the system start some of the instructor-implemented nodes and some of your nodes, all being configured
+   in torr.conf
+       ./torrl-windows-amd64.exe 1:1 1:2  - this starts tow of the instructor nodes on ports 5001 and 5002
+       ./your-own-implementation 1:3      - this starts your node on port 5003
+       ./torrc-windows-amd64.exe          - this starts the client that cheks the system functioning
+
+6. Implement handlers for al the messages below that are supposed to be handled by the node. See the "Client -> Node"
+   and "Node -> Node" markers of each message. For instance, you should handle a ReplicateRequest, and send back a
+   ReplicateResponse. You should also be able to handle a ChunkRequest, but also send a ChunkRequest.
+
+7. Every response message contains a status field and an error message.
+
+8. The files/chunks that you receive, do not have to be stored on disk, they can be kept in memory just as well.
+
+9. The standard chunk size will be 1024, with the last chunk being usually smaller.
+
+10. The first chunk index is 0.
+
+11. When broadcasting a request to all nodes, aggregate in the response, everything that you get from other nodes,
+    including failed responses, and all responses from the same node. Basically, keep everything. The client will
+    rely on these for evaluating your implementation. For example, when you get a ReplicateRequest, you need to send
+    ChunkRequests to all nodes. Some will give you ChunkReponses with data, others with error. Sometimes, you might have
+    to ask the same node multiple times. All these reponses must be stored in the ReplicateResponse.
+
+12. In order to determine the type of the message you receive, all messages should be wrapped in the wrapper message.
+        - Sending example in a mix of languages
+            LocalSearchRequest lsr = ...
+            Message msg = Message.newBuilder()
+                                 .setType(Message.Type.LOCAL_SEARCH_REQUEST)
+                                 .setLocalSearchRequest(lsr)
+                                 .build();
+            byte[] m = msg.toByteArray();
+            int len = m.length; // 32-bit integer
+            len = convert-big-endian(len);
+            send(len)
+            send(m)
+        - Receiving example in a mix of languages
+            int len = receive(sizeof(int)) // 32-bit integer
+            len = convert-to-local-endianness(len);
+            byte[] m = receive(len);
+            Message msg = Message.parse(m);
+            if(msg.hasLocalSearchRequest()) {
+                do-stuff(msg.getLocalSearchRequest());
+            }
+*/
+
+// Common
+message Node {
+    string host = 1;
+    int32  port = 2;
+}
+
+enum Status {
+    SUCCESS = 0;
+    UNABLE_TO_COMPLETE = 1; // there are no errors, but the requested operation cannot be completed
+    MESSAGE_ERROR = 2; // the incoming request or response is invalid in some way
+    NETWORK_ERROR = 3; // any network communication problem
+    PROCESSING_ERROR = 4; // any other error
+}
+
+message ChunkInfo {
+    uint32 index = 1; // Chunk order number starting from 0
+    uint32 size = 2; // The standard chunk size is 1024. Last chunks will be smaller.
+    bytes hash = 3; // MD5 of the chunk content (1024 bytes or less)
+}
+
+message FileInfo {
+    bytes hash = 1; // MD5 of the file content
+    uint32 size = 2;
+    string filename = 3;
+    repeated ChunkInfo chunks = 4;
+}
+
+message NodeReplicationStatus {
+    Node node = 1;
+    uint32 chunkIndex = 2;
+    Status status = 3;
+    string errorMessage = 4;
+}
+
+message NodeSearchResult {
+    Node node = 1;
+    Status status = 2;
+    string errorMessage = 3;
+    repeated FileInfo files = 4;
+}
+
+// Parties:
+//   Client -> Node
+//   Node   -> Node
+// Description:
+//   Search locally for filenames matching the regex
+// Response status:
+//   - SUCCESS if all went well, even if there are no results
+//   - MESSAGE_ERROR if the request regexp is invalid
+//   - PROCESSING_ERROR in all other cases
+message LocalSearchRequest {
+    string regex = 1;
+}
+message LocalSearchResponse {
+    Status status = 1;
+    string errorMessage = 2;
+    repeated FileInfo fileInfo = 3;
+}
+
+// Parties:
+//   Client -> Node
+// Description:
+//   Search all nodes (using LocalSearchRequest) for filenames matching the regex and aggregated the results
+//   If no nodes reply, just return what you have locally, and declare success.
+// Response status:
+//   - SUCCESS if all went well, even if there are no results, and/or no other nodes replied
+//   - MESSAGE_ERROR if the request regexp is invalid
+//   - PROCESSING_ERROR in all other cases
+// NodeSearchResult status:
+//   - NETWORK_ERROR if you cannot connect to the node
+//   - MESSAGE_ERROR if the response is not parsable or has the wrong type
+//   - Otherwise, use LocalSearchResponse.status
+message SearchRequest {
+    string regex = 1;
+}
+message SearchResponse {
+    Status status = 1;
+    string errorMessage = 2;
+    repeated NodeSearchResult results = 3;
+}
+
+// Parties:
+//   Client -> Node
+// Description:
+//   Store locally the given file. Return the details about the file.
+// Response status:
+//   - SUCCESS if all went well, even if you have the file already
+//   - MESSAGE_ERROR if the filename is empty (it is OK for the data to be empty)
+//   - PROCESSING_ERROR in all other cases
+message UploadRequest {
+    string filename = 1;
+    bytes  data = 2;
+}
+message UploadResponse {
+    Status status = 1;
+    string errorMessage = 2;
+    FileInfo fileInfo = 3; // The FileInfo you stored or had already
+}
+
+// Parties:
+//   Client -> Node
+// Description:
+//   Replicate this file locally, if not present already. Ask for chunks from the other nodes using ChunkRequest.
+//   If a ChunkRequest fails, send it to another node until you tried al nodes. If none of the nodes gives you that
+//   chunk's data,
+// Response status:
+//   - SUCCESS if all went well, even if you have the file already
+//   - MESSAGE_ERROR if the filename in the FileInfo is empty
+//   - UNABLE_TO_COMPLETE if you cannot receive all the chunks from the other nodes
+//   - PROCESSING_ERROR in all other cases
+// NodeReplication status:
+//   - NETWORK_ERROR if you cannot connect to the node
+//   - MESSAGE_ERROR if the response is not parsable or has the wrong type
+//   - Otherwise, use ChunkResponse.status
+message ReplicateRequest {
+    FileInfo fileInfo = 1;
+}
+message ReplicateResponse {
+    Status status = 1;
+    string errorMessage = 2;
+    repeated NodeReplicationStatus nodeStatusList = 3; // The status of all the requests to other nodes
+}
+
+// Parties:
+//   Node -> Node
+// Description:
+//   Download the specified chunk.
+// Response status:
+//   - SUCCESS if you have the chunk
+//   - MESSAGE_ERROR if the filehash is not 16 bytes long or the index is less than zero
+//   - UNABLE_TO_COMPLETE if you do not have the chunk
+//   - PROCESSING_ERROR in all other cases
+message ChunkRequest {
+    bytes fileHash = 1; // MD5 of the file content
+    uint32 chunkIndex = 2;
+}
+message ChunkResponse {
+    Status status = 1;
+    string errorMessage = 2;
+    bytes data = 3; // Chunk content (1024 bytes or less)
+}
+
+// Parties:
+//   Client -> Node
+// Description:
+//   Download a file from the local node based on its hash
+// Response status:
+//   - SUCCESS if you have the file
+//   - MESSAGE_ERROR if the filehash is not 16 bytes long
+//   - UNABLE_TO_COMPLETE if you do not have the file
+//   - PROCESSING_ERROR in all other cases
+message DownloadRequest {
+    bytes fileHash = 1; // MD5 of the file content
+}
+message DownloadResponse {
+    Status status = 1;
+    string errorMessage = 2;
+    bytes data = 3; // File content
+}
+
+// Wrapper message
+message Message {
+    enum Type {
+        LOCAL_SEARCH_REQUEST = 0;
+        LOCAL_SEARCH_RESPONSE = 1;
+        SEARCH_REQUEST = 2;
+        SEARCH_RESPONSE = 3;
+        UPLOAD_REQUEST = 4;
+        UPLOAD_RESPONSE = 5;
+        REPLICATE_REQUEST = 6;
+        REPLICATE_RESPONSE = 7;
+        CHUNK_REQUEST = 8;
+        CHUNK_RESPONSE = 9;
+        DOWNLOAD_REQUEST = 10;
+        DOWNLOAD_RESPONSE = 11;
+    }
+
+    Type type = 1;
+
+    LocalSearchRequest localSearchRequest = 2;
+    LocalSearchResponse localSearchResponse = 3;
+    SearchRequest searchRequest = 4;
+    SearchResponse searchResponse = 5;
+    UploadRequest uploadRequest = 6;
+    UploadResponse uploadResponse = 7;
+    ReplicateRequest replicateRequest = 8;
+    ReplicateResponse replicateResponse = 9;
+    ChunkRequest chunkRequest = 10;
+    ChunkResponse chunkResponse = 11;
+    DownloadRequest downloadRequest = 12;
+    DownloadResponse downloadResponse = 13;
+}
