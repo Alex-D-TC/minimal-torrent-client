@@ -1,6 +1,9 @@
 ### Exclude torrent sample binaries
 torr-binaries/*
 
+### Exclude protobuf generated .go files
+*.pb.go
+
 # Created by https://www.gitignore.io/api/go,vim,executable,visualstudiocode
 # Edit at https://www.gitignore.io/?templates=go,vim,executable,visualstudiocode
 
