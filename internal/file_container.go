@@ -5,44 +5,51 @@ import (
 )
 
 type FileContainer struct {
-	infoIndex      map[MD5Hash]*FileInfo
-	fileSystemRoot string
+	infoIndex map[MD5Hash]*FileInfo
+}
+
+func MakeFileContainer() *FileContainer {
+	return &FileContainer{
+		infoIndex: map[MD5Hash]*FileInfo{},
+	}
 }
 
 func (fc *FileContainer) AddFile(hash MD5Hash, size int64, name string) error {
-	fileInfo := makeFileInfo(hash, name, size)
+	if len(name) == 0 {
+		return InvalidFileNameError()
+	}
 
 	// Check for hash collisions or whether the file was already added
 	foundFileInfo, exists := fc.infoIndex[hash]
 	if exists && foundFileInfo.GetName() != name {
-		return &HashCollisionError{}
+		return HashCollisionEror()
 	}
 	if !exists {
-		fc.infoIndex[hash] = fileInfo
+		fc.infoIndex[hash] = makeFileInfo(hash, name, size)
 	}
 
 	return nil
 }
 
-func (fc *FileContainer) Search(regex string) ([]MD5Hash, error) {
+func (fc *FileContainer) Search(regex string) ([]*FileInfo, error) {
 	regexMatcher, err := regexp.Compile(regex)
 	if err != nil {
-		return nil, err
+		return nil, RegexFailureError()
 	}
 
-	var hashes []MD5Hash
+	var files []*FileInfo
 	for _, fileItem := range fc.infoIndex {
 		if regexMatcher.MatchString(fileItem.GetName()) {
-			hashes = append(hashes, fileItem.GetHash())
+			files = append(files, fileItem)
 		}
 	}
-	return hashes, nil
+	return files, nil
 }
 
 func (fc *FileContainer) GetFile(hash MD5Hash) (*FileInfo, error) {
 	fi, exists := fc.infoIndex[hash]
 	if !exists {
-		return nil, &FileNotFoundError{}
+		return nil, FileNotFoundError()
 	}
 	return fi, nil
 }

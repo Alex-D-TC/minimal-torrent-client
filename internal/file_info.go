@@ -40,12 +40,26 @@ func (fi *FileInfo) GetSize() int64 {
 // GetChunk reads a chunk from the managed file
 // If parts of the chunk are not yet written in the file, the function returns an internal.ChunkUnwrittenError error
 func (fi *FileInfo) GetChunk(offset int64, size int64) ([]byte, error) {
+	// Offset validation
+	if offset < 0 || offset >= fi.GetSize() {
+		return nil, ChunkUnwrittenError()
+	}
+
 	// Check whether there are parts of the chunk which have not been written
 	foundIntervals := fi.unwrittenIntervals.Query(&chunkInterval{left: offset, right: offset + size - 1})
 	if len(foundIntervals) != 0 {
-		return nil, &ChunkUnwrittenError{}
+		fmt.Println("Chunk at offset ", offset, " of len ", size, " is not fully written ", fi.hash)
+		return nil, ChunkUnwrittenError()
 	}
-	return fi.data[offset : offset+size], nil
+
+	fmt.Println("Reading chunk from offset ", offset, " of size ", size, ". File is of size ", fi.size, len(fi.data), cap(fi.data), fi.hash)
+	data := make([]byte, size)
+	for i := int64(0); i < size; i++ {
+		theByte := fi.data[offset+i]
+		data[i] = theByte
+	}
+
+	return data, nil
 }
 
 // WriteChunk writes a chunk to the managed file
@@ -56,23 +70,28 @@ func (fi *FileInfo) WriteChunk(offset int64, data []byte) error {
 
 	// Bounds checking
 	if offset < 0 || offset > fiDataLen || offset+dataLen > fiDataLen {
-		return &ChunkUnwrittenError{}
+		return ChunkUnwrittenError()
 	}
 
+	fmt.Println("Writing chunk at offset ", offset, " of size ", dataLen, fi.hash, len(fi.data), cap(fi.data))
 	// Update the unwritten interval tree and write the data
-	for i := offset; i < offset+dataLen; i++ {
-		fi.data[i] = data[i]
+	for i := int64(0); i < dataLen; i++ {
+		fi.data[offset+i] = data[i]
 	}
-	markWrittenInterval(fi.unwrittenIntervals,
-		&chunkInterval{left: offset, right: offset + int64(len(data)) - 1})
+	markWrittenInterval(fi.unwrittenIntervals, &chunkInterval{left: offset, right: offset + int64(len(data)) - 1})
+
 	return nil
+}
+
+// GetContents returns the contents of the file
+func (fi *FileInfo) GetContents() []byte {
+	return append([]byte(nil), fi.data...)
 }
 
 func makeFileInfo(hash MD5Hash, name string, size int64) *FileInfo {
 
-	unwrittenIntervals := augmentedtree.New(1)
-
 	// Add the first unwritten interval
+	unwrittenIntervals := augmentedtree.New(1)
 	unwrittenIntervals.Add(&chunkInterval{0, size - 1})
 
 	return &FileInfo{
