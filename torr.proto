@@ -6,42 +6,29 @@ syntax = "proto3";
    synchronous. When sending a request, open the TCP connection, send the message, get back the response, then close
    the connection. When listening for requests, send back the response, then close the socket.
 
-2. The system consists of several nodes and one client. Your job is to implement the node. The client will be provided
+2. The system consists of several nodes and one hub. Your job is to implement the node. The hub will be provided
    to you by the instructor.
 
 3. The evaluation will be done as follows:
-       - Your laptops will connect to a small wired switch and have predefined static addresses
-       - The instructor's laptop will also be connected to the switch and test your nodes using the client
-       - You will run 3 nodes on your laptop, each on a predefined port
+       - Your laptops will connect to the wireless network on campus
+       - The instructor's laptop will also be connected to the wireless network on campus
+       - You will run 3 nodes on your laptop, each on a port chosen by you
        - Your nodes will communicate with your colleagues and the instructor's nodes
-       - Initially your nodes will have no data. The instructor's client will upload various files to various nodes,
+       - Initially your nodes will have no data. The instructor's hub will upload various files to various nodes,
          and ask you to replicate locally some of those files. It will also download files form you to make sure they
          are correct.
 
-4. Node referencing: as all IP addresses are known ahead of time and belong to the same network, and the ports are
-   predefined, the nodes will be referred, for convenience, as <ip-suffix>:<port-offset>. This is not necessarily
-   relevant for your implementation, but it is useful understanding it. See below for beter understanding
+4. Node referencing: Upon starting, a node will connect to the hub and register. The hub address and port will be
+   configured manually.
 
-5. You should have a configuration of some sort that contains the folowing information
-       - ip-prefix 127.0.0
-       - port-base 5000
-       - ip-suffixes 2 3 4 5 6 7 8 9
-       - port-offsets 1 2 3
-   Using this configuration, you will easly know all the nodes in the network. All this will be given to you during the
-   evaluation, and you should be able to easily apply the configuration to you implementation. Following the convention
-   at point 4, a node reference of 1:3, refers to a node running on host 127.0.0.1 and port 5003. You do not need to use
-   this convention, but the instructor will identify your nodes in this manner. Be prepared to handle nodes that are
-   offline.
+5. The hub will play the role of bookkeeper for the active nodes, and also of evaluator. Every search and replicate
+   request sent by the hub, will contain a subnet ID, identifying the nodes involved in the test. A node, will ask the
+   hub for the subnet nodes corresponding to the subnet ID and collaborate only with those node for responding to the
+   request.
 
-   To run the system start some of the instructor-implemented nodes and some of your nodes, all being configured
-   in torr.conf
-       ./torrl-windows-amd64.exe 1:1 1:2  - this starts tow of the instructor nodes on ports 5001 and 5002
-       ./your-own-implementation 1:3      - this starts your node on port 5003
-       ./torrc-windows-amd64.exe          - this starts the client that cheks the system functioning
-
-6. Implement handlers for al the messages below that are supposed to be handled by the node. See the "Client -> Node"
-   and "Node -> Node" markers of each message. For instance, you should handle a ReplicateRequest, and send back a
-   ReplicateResponse. You should also be able to handle a ChunkRequest, but also send a ChunkRequest.
+6. Implement handlers for al the messages below that are supposed to be handled by the node. See the "Hub -> Node",
+   "Node -> Hub", and "Node -> Node" markers of each message. For instance, you should handle a ReplicateRequest,
+   and send back a ReplicateResponse. You should also be able to handle a ChunkRequest, but also send a ChunkRequest.
 
 7. Every response message contains a status field and an error message.
 
@@ -52,12 +39,14 @@ syntax = "proto3";
 10. The first chunk index is 0.
 
 11. When broadcasting a request to all nodes, aggregate in the response, everything that you get from other nodes,
-    including failed responses, and all responses from the same node. Basically, keep everything. The client will
+    including failed responses, and all responses from the same node. Basically, keep everything. The hub will
     rely on these for evaluating your implementation. For example, when you get a ReplicateRequest, you need to send
-    ChunkRequests to all nodes. Some will give you ChunkReponses with data, others with error. Sometimes, you might have
-    to ask the same node multiple times. All these reponses must be stored in the ReplicateResponse.
+    ChunkRequests to all nodes. Some will give you ChunkReponses with data, others with error. Sometimes, you might
+    have to ask the same node multiple times. All these responses must be stored in the ReplicateResponse.
 
 12. In order to determine the type of the message you receive, all messages should be wrapped in the wrapper message.
+    The messages travel over the network as buffers prefixed with an int containing the length of the buffer. See the
+    example below for details
         - Sending example in a mix of languages
             LocalSearchRequest lsr = ...
             Message msg = Message.newBuilder()
@@ -77,12 +66,53 @@ syntax = "proto3";
             if(msg.hasLocalSearchRequest()) {
                 do-stuff(msg.getLocalSearchRequest());
             }
+13. Reference implementation
+    - In the archive posted on the course website you will find the reference implementation compiled for three
+      operating systems and two architectures. Use the one that matches your environment.
+    - The reference implementation will create a log subdirectory of the workign directory and will store there
+      execution log files. The hub and default three nodes will log in file ref.log, while other nodes having other
+      aliases will use file <alias>.log (e.g. log/joe.log)
+    - Usage: torr-windows-amd64.exe <hub-ip> <hub-port> <nodes-ip> <node-1-port> <node-2-port> <node-3-port> <optional-owner-alias>
+        Examples:
+        - Run the hub and 3 reference nodes. When no owner alias is given, the hub is started along with three nodes
+          having the alias "ref"
+             torr-windows-amd64.exe 127.0.0.1 5000 127.0.0.1 5001 5002 5003
+
+        - Run 3 other reference nodes. When given an owner alias, the hub is not started, and three nodes are started
+          with the given alias. The given hub should be an already active instance.
+             torr-windows-amd64.exe 127.0.0.1 5000 127.0.0.1 5004 5005 5006 abc
+    - The reference implementation offers a prompt where you can run a few commands. You will be interested in "help",
+      "nodes", "test", "quite". The "on", "off", "done" commands are for managing the nodes during evaluation
+    - To just test the reference implementation, do:
+          C:>torr-windows-amd64.exe 127.0.0.1 5000 127.0.0.1 5001 5002 5003
+          Listening on 127.0.0.1:5000
+          torr> nodes
+          on   ref        127.0.0.1:5001         127.0.0.1:5002         127.0.0.1:5003
+          torr> test ref
+          ...
+          torr> quit
+          Stopping ...
+    - To test your implementation against the reference, do:
+          - Start the reference implementation with hub
+              C:>torr-windows-amd64.exe 127.0.0.1 5000 127.0.0.1 5001 5002 5003
+              Listening on 127.0.0.1:5000
+          - Start three nodes of your implementation having the hub of the reference implementation
+          - Get back to the reference implementation and do:
+              torr> nodes
+              on   ref        127.0.0.1:5001         127.0.0.1:5002         127.0.0.1:5003
+              on   joe        127.0.0.1:5004         127.0.0.1:5005         127.0.0.1:5006
+              torr> test ref joe
+              ...
+              torr> quit
+              Stopping ...
 */
 
 // Common
-message Node {
-    string host = 1;
+message NodeId {
+    string host = 1; // String containing either domain name  or IP (most likely)
     int32  port = 2;
+    string owner = 3; // Short alias or acronym of the owner of the node
+    int32 index = 4; // Node index within the owner's nodes. Must be 0, 1, or 2
 }
 
 enum Status {
@@ -107,22 +137,59 @@ message FileInfo {
 }
 
 message NodeReplicationStatus {
-    Node node = 1;
+    NodeId node = 1;
     uint32 chunkIndex = 2;
     Status status = 3;
     string errorMessage = 4;
 }
 
 message NodeSearchResult {
-    Node node = 1;
+    NodeId node = 1;
     Status status = 2;
     string errorMessage = 3;
     repeated FileInfo files = 4;
 }
 
 // Parties:
-//   Client -> Node
-//   Node   -> Node
+//    Node -> Hub
+// Description:
+//   Register node presence in the system, by sending the IP, port, your name or an alias, and the order number
+//   (index) of your node. The index must be 0, 1, or 2.
+// Response status:
+//   - SUCCESS if all went well, even if there are no results
+//   - MESSAGE_ERROR if the node index is not 0, 1, or 2, or the owner is empty
+//   - PROCESSING_ERROR in all other cases
+message RegistrationRequest {
+    string owner = 1; // Short alias or acronym of the owner of the node
+    int32 index = 2; // Node index within the owner's nodes. Must be 0, 1, or 2
+    int32 port = 3; // The port on which the node is listening for connections
+}
+message RegistrationResponse {
+    Status status = 1;
+    string errorMessage = 2;
+}
+
+// Parties:
+//    Node -> Hub
+//    Get the list of nodes corresponding to the given subnet ID. Each search and replicate requests will carry this ID
+//    with it, identifying the nodes involved in its processing.
+// Response status:
+//   - SUCCESS if all went well, even if there are no results
+//   - UNABLE_TO_COMPLETE if the hash cannot be found (this means the node list is cancelled and all messages
+//                        referencing it should be ignored)
+//   - PROCESSING_ERROR in all other cases
+message SubnetRequest {
+    int32 subnetId = 1;
+}
+message SubnetResponse {
+    Status status = 1;
+    string errorMessage = 2;
+    repeated NodeId nodes = 3;
+}
+
+// Parties:
+//   Hub  -> Node
+//   Node -> Node
 // Description:
 //   Search locally for filenames matching the regex
 // Response status:
@@ -139,7 +206,7 @@ message LocalSearchResponse {
 }
 
 // Parties:
-//   Client -> Node
+//   Hub -> Node
 // Description:
 //   Search all nodes (using LocalSearchRequest) for filenames matching the regex and aggregated the results
 //   If no nodes reply, just return what you have locally, and declare success.
@@ -153,6 +220,7 @@ message LocalSearchResponse {
 //   - Otherwise, use LocalSearchResponse.status
 message SearchRequest {
     string regex = 1;
+    int32 subnetId = 2;
 }
 message SearchResponse {
     Status status = 1;
@@ -161,7 +229,7 @@ message SearchResponse {
 }
 
 // Parties:
-//   Client -> Node
+//   Hub -> Node
 // Description:
 //   Store locally the given file. Return the details about the file.
 // Response status:
@@ -195,6 +263,7 @@ message UploadResponse {
 //   - Otherwise, use ChunkResponse.status
 message ReplicateRequest {
     FileInfo fileInfo = 1;
+    int32 subnetId = 2;
 }
 message ReplicateResponse {
     Status status = 1;
@@ -254,6 +323,10 @@ message Message {
         CHUNK_RESPONSE = 9;
         DOWNLOAD_REQUEST = 10;
         DOWNLOAD_RESPONSE = 11;
+        REGISTRATION_REQUEST = 12;
+        REGISTRATION_RESPONSE = 13;
+        SUBNET_REQUEST = 14;
+        SUBNET_RESPONSE = 15;
     }
 
     Type type = 1;
@@ -270,4 +343,8 @@ message Message {
     ChunkResponse chunkResponse = 11;
     DownloadRequest downloadRequest = 12;
     DownloadResponse downloadResponse = 13;
+    RegistrationRequest registrationRequest = 14;
+    RegistrationResponse registrationResponse = 15;
+    SubnetRequest subnetRequest = 16;
+    SubnetResponse subnetResponse = 17;
 }

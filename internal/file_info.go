@@ -1,7 +1,9 @@
 package internal
 
 import (
+	"encoding/hex"
 	"fmt"
+	"sync"
 
 	"github.com/golang-collections/go-datastructures/augmentedtree"
 )
@@ -11,6 +13,8 @@ type MD5Hash [16]byte
 
 // FileInfo is a struct which encapsulates the accessing of a file handled by the torrent node
 type FileInfo struct {
+	sync.RWMutex
+
 	// a buffer representing the "file"
 	data []byte
 
@@ -45,14 +49,17 @@ func (fi *FileInfo) GetChunk(offset int64, size int64) ([]byte, error) {
 		return nil, ChunkUnwrittenError()
 	}
 
+	fi.RLock()
+	defer fi.RUnlock()
+
 	// Check whether there are parts of the chunk which have not been written
 	foundIntervals := fi.unwrittenIntervals.Query(&chunkInterval{left: offset, right: offset + size - 1})
 	if len(foundIntervals) != 0 {
-		fmt.Println("Chunk at offset ", offset, " of len ", size, " is not fully written ", fi.hash)
+		//fmt.Println("Chunk at offset ", offset, " of len ", size, " is not fully written ", fi.hash)
 		return nil, ChunkUnwrittenError()
 	}
 
-	fmt.Println("Reading chunk from offset ", offset, " of size ", size, ". File is of size ", fi.size, len(fi.data), cap(fi.data), fi.hash)
+	//fmt.Println("Reading chunk from offset ", offset, " of size ", size, ". File is of size ", fi.size, len(fi.data), cap(fi.data), fi.hash)
 	data := make([]byte, size)
 	for i := int64(0); i < size; i++ {
 		theByte := fi.data[offset+i]
@@ -68,12 +75,22 @@ func (fi *FileInfo) WriteChunk(offset int64, data []byte) error {
 	dataLen := int64(len(data))
 	fiDataLen := int64(len(fi.data))
 
+	fmt.Println("Writing chunk at offset: ", offset, " of size ", dataLen, " hash: ", hex.EncodeToString(fi.hash[:]))
+
 	// Bounds checking
 	if offset < 0 || offset > fiDataLen || offset+dataLen > fiDataLen {
 		return ChunkUnwrittenError()
 	}
 
-	fmt.Println("Writing chunk at offset ", offset, " of size ", dataLen, fi.hash, len(fi.data), cap(fi.data))
+	// Validation
+	if dataLen == 0 {
+		return ChunkUnwrittenError()
+	}
+
+	fi.Lock()
+	defer fi.Unlock()
+
+	//fmt.Println("Writing chunk at offset ", offset, " of size ", dataLen, fi.hash, len(fi.data), cap(fi.data))
 	// Update the unwritten interval tree and write the data
 	for i := int64(0); i < dataLen; i++ {
 		fi.data[offset+i] = data[i]
@@ -107,18 +124,25 @@ func makeFileInfo(hash MD5Hash, name string, size int64) *FileInfo {
 // any affected intervals are truncated or outright removed from the tree
 func markWrittenInterval(rTree augmentedtree.Tree, writtenInterval *chunkInterval) {
 	affectedIntervals := rTree.Query(writtenInterval)
+
+	fmt.Println("Written interval: ", writtenInterval.left, "-", writtenInterval.right)
+
 	for _, interval := range affectedIntervals {
 		// In either case, the interval is removed
 		rTree.Delete(interval)
 
+		fmt.Println("Fixing interval: ", interval.LowAtDimension(1), "-", interval.HighAtDimension(1))
+
 		// Try reinserting the left side of the interval, truncated
 		if interval.LowAtDimension(1) < writtenInterval.left {
 			rTree.Add(&chunkInterval{left: interval.LowAtDimension(1), right: writtenInterval.left - 1})
+			fmt.Println("Adding interval: ", interval.LowAtDimension(1), "-", writtenInterval.left-1)
 		}
 
 		// Try reinserting the right side of the interval, truncated
 		if interval.HighAtDimension(1) > writtenInterval.right {
 			rTree.Add(&chunkInterval{left: writtenInterval.right + 1, right: interval.HighAtDimension(1)})
+			fmt.Println("Adding interval: ", writtenInterval.right+1, "-", interval.HighAtDimension(1))
 		}
 	}
 }

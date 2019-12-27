@@ -43,25 +43,35 @@ type NodeSearchResult struct {
 type CommAttempt struct {
 	Host         string
 	Port         uint32
+	Name         string
+	Index        uint32
 	TorrStatus   torr.Status
 	ErrorMessage string
 }
 
-func MakeTorrentService(chunkSize int64, ipPrefix [3]byte, portBase uint16, ipSuffixes []byte, portOffsets []uint16, hostIPSuffix byte, hostPortOffset uint16) *TorrentService {
+func MakeTorrentService(chunkSize int64, communicator *commlib.TorrCommunicator) *TorrentService {
 	return &TorrentService{
-		torrCommunicator: commlib.MakeTorrCommunicator(ipPrefix, portBase, ipSuffixes, portOffsets, hostIPSuffix, hostPortOffset),
+		torrCommunicator: communicator,
 		fileContainer:    internal.MakeFileContainer(),
 		chunkSize:        chunkSize,
 	}
 }
 
-func (service *TorrentService) Search(regex string) ([]*NodeSearchResult, error) {
+func (service *TorrentService) Search(regex string, subnetID int32) ([]*NodeSearchResult, error) {
+	nodes, err := service.torrCommunicator.GetNodesOfSubnet(subnetID)
+	if err != nil {
+		fmt.Println("GetNodesOfSubnet failed: ", err)
+		return nil, err
+	}
+
 	searchResults := []*NodeSearchResult{}
 	responseHandler := func(resp *torr.LocalSearchResponse, attempt *commlib.CommunicationAttempt) {
 		searchResult := &NodeSearchResult{
 			CommAttempt: CommAttempt{
 				Host:         attempt.Host,
 				Port:         attempt.Port,
+				Name:         attempt.Name,
+				Index:        attempt.Index,
 				TorrStatus:   torr.Status_UNABLE_TO_COMPLETE,
 				ErrorMessage: "",
 			},
@@ -82,11 +92,11 @@ func (service *TorrentService) Search(regex string) ([]*NodeSearchResult, error)
 		searchResult.TorrStatus = resp.GetStatus()
 		searchResult.FoundFiles = resp.GetFileInfo()
 	}
-	err := service.torrCommunicator.SendLocalSearchRequest(regex, responseHandler)
+	err = service.torrCommunicator.SendLocalSearchRequest(nodes, regex, responseHandler)
 	return searchResults, err
 }
 
-func (service *TorrentService) Replicate(hash internal.MD5Hash, name string, size int64) ([]*NodeReplicationAttempt, error) {
+func (service *TorrentService) Replicate(hash internal.MD5Hash, name string, size int64, subnetID int32) ([]*NodeReplicationAttempt, error) {
 	// Input validation
 	if len(name) == 0 {
 		return nil, InvalidFileNameError()
@@ -99,7 +109,7 @@ func (service *TorrentService) Replicate(hash internal.MD5Hash, name string, siz
 	}
 
 	// Attempt to acquire the file
-	return service.acquireFile(hash, name, size)
+	return service.acquireFile(hash, name, size, subnetID)
 }
 
 func (service *TorrentService) GetFileData(hash internal.MD5Hash) ([]byte, error) {
@@ -223,7 +233,7 @@ func (service *TorrentService) prepareChunkInfoViews(file *internal.FileInfo) ([
 	return chunkViews, nil
 }
 
-func (service *TorrentService) acquireFile(hash internal.MD5Hash, name string, size int64) ([]*NodeReplicationAttempt, error) {
+func (service *TorrentService) acquireFile(hash internal.MD5Hash, name string, size int64, subnetID int32) ([]*NodeReplicationAttempt, error) {
 	// Construct the FileInfo
 	err := service.fileContainer.AddFile(hash, size, name)
 	if err != nil {
@@ -235,12 +245,19 @@ func (service *TorrentService) acquireFile(hash internal.MD5Hash, name string, s
 		return nil, service.handleInternalError(err)
 	}
 
+	// Get nodes of subnet
+	nodes, err := service.torrCommunicator.GetNodesOfSubnet(subnetID)
+	if err != nil {
+		fmt.Println("GetNodesOfSubnet failed: ", err)
+		return nil, ProcessingError()
+	}
+
 	// Attempt to request all the chunks
 	// TODO: consider adding a RemoveFile function, to cleanup partially downloaded files
-	return service.obtainChunks(file)
+	return service.obtainChunks(file, nodes)
 }
 
-func (service *TorrentService) obtainChunks(file *internal.FileInfo) ([]*NodeReplicationAttempt, error) {
+func (service *TorrentService) obtainChunks(file *internal.FileInfo, nodes []commlib.TorrNode) ([]*NodeReplicationAttempt, error) {
 	chunkCount := file.GetSize() / service.chunkSize
 	if file.GetSize()%service.chunkSize != 0 {
 		chunkCount++
@@ -250,7 +267,7 @@ func (service *TorrentService) obtainChunks(file *internal.FileInfo) ([]*NodeRep
 	chunkRequestorChan := make(chan []*NodeReplicationAttempt, chunkCount)
 	// Launch goroutines to fetch the chunks
 	for i := int64(0); i < chunkCount; i++ {
-		go service.fetchChunk(file, uint32(i), chunkRequestorChan)
+		go service.fetchChunk(nodes, file, uint32(i), chunkRequestorChan)
 	}
 
 	replicationAttempts := []*NodeReplicationAttempt{}
@@ -269,7 +286,7 @@ func (service *TorrentService) obtainChunks(file *internal.FileInfo) ([]*NodeRep
 	return replicationAttempts, err
 }
 
-func (service *TorrentService) fetchChunk(file *internal.FileInfo, chunkIndex uint32, requestorChan chan<- []*NodeReplicationAttempt) {
+func (service *TorrentService) fetchChunk(nodes []commlib.TorrNode, file *internal.FileInfo, chunkIndex uint32, requestorChan chan<- []*NodeReplicationAttempt) {
 	attemptsForChunk := []*NodeReplicationAttempt{}
 	responseHandler := func(resp *torr.ChunkResponse, attempt *commlib.CommunicationAttempt) bool {
 		// Record chunk replication attempt
@@ -277,6 +294,8 @@ func (service *TorrentService) fetchChunk(file *internal.FileInfo, chunkIndex ui
 			CommAttempt: CommAttempt{
 				Host:         attempt.Host,
 				Port:         attempt.Port,
+				Name:         attempt.Name,
+				Index:        attempt.Index,
 				TorrStatus:   torr.Status_UNABLE_TO_COMPLETE,
 				ErrorMessage: "",
 			},
@@ -300,7 +319,7 @@ func (service *TorrentService) fetchChunk(file *internal.FileInfo, chunkIndex ui
 
 		// Handle response
 		if resp.GetStatus() != torr.Status_SUCCESS {
-			fmt.Println("Chunk request failed with status ", resp.GetErrorMessage())
+			//fmt.Println("Chunk request failed with status ", resp.GetErrorMessage())
 			return true
 		}
 		// Copy the chunk over
@@ -313,7 +332,7 @@ func (service *TorrentService) fetchChunk(file *internal.FileInfo, chunkIndex ui
 		return false
 	}
 	hash := file.GetHash()
-	err := service.torrCommunicator.SendChunkRequest(uint64(chunkIndex), hash[:], chunkIndex, responseHandler)
+	err := service.torrCommunicator.SendChunkRequest(nodes, uint64(chunkIndex), hash[:], chunkIndex, responseHandler)
 	if err != nil {
 		// Log the error
 		err = fmt.Errorf("Failed obtaining chunk: %d. Error: %s", chunkIndex, err.Error())

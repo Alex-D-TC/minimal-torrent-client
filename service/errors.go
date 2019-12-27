@@ -7,6 +7,7 @@ type ServiceError struct {
 	IsFilenameInvalid    bool
 	IsRegexFailure       bool
 	IsReplicationFailure bool
+	IsProcessingFailure  bool
 }
 
 func (se *ServiceError) Error() string {
@@ -28,7 +29,14 @@ func (se *ServiceError) Error() string {
 	if se.IsReplicationFailure {
 		return "Could not obtain one or more chunks when replicating"
 	}
+	if se.IsProcessingFailure {
+		return "Generic processing error encountered"
+	}
 	return "Undefined error"
+}
+
+func ProcessingError() error {
+	return &ServiceError{IsProcessingFailure: true}
 }
 
 func ReplicationFailedError() error {

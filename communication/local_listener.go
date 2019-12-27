@@ -68,22 +68,22 @@ func (listener *LocalListener) handleConn(conn net.Conn) {
 func (listener *LocalListener) handleTorrentMessage(conn net.Conn, msg *torr.Message) error {
 	switch msg.GetType() {
 	case torr.Message_CHUNK_REQUEST:
-		fmt.Println("Received chunk request ", msg.GetChunkRequest().GetChunkIndex(), msg.GetChunkRequest().GetFileHash())
+		//fmt.Println("Received chunk request ", msg.GetChunkRequest().GetChunkIndex(), msg.GetChunkRequest().GetFileHash())
 		return listener.handleChunkRequest(conn, msg.GetChunkRequest())
 	case torr.Message_LOCAL_SEARCH_REQUEST:
-		fmt.Println("Received local search request")
+		fmt.Println("Received local search request with regex: ", msg.GetLocalSearchRequest().GetRegex())
 		return listener.handleLocalSearchRequest(conn, msg.GetLocalSearchRequest())
 	case torr.Message_SEARCH_REQUEST:
 		fmt.Println("Received search request")
 		return listener.handleSearchRequest(conn, msg.GetSearchRequest())
 	case torr.Message_REPLICATE_REQUEST:
-		fmt.Println("Received replicate request ", msg.GetReplicateRequest().GetFileInfo().GetHash())
+		fmt.Println("Received replicate request ", msg.GetReplicateRequest().GetFileInfo().GetFilename())
 		return listener.handleReplicateRequest(conn, msg.GetReplicateRequest())
 	case torr.Message_DOWNLOAD_REQUEST:
 		fmt.Println("Received download request")
 		return listener.handleDownloadRequest(conn, msg.GetDownloadRequest())
 	case torr.Message_UPLOAD_REQUEST:
-		fmt.Println("Received upload request")
+		fmt.Println("Received upload request ", msg.GetUploadRequest().GetFilename())
 		return listener.handleUploadRequest(conn, msg.GetUploadRequest())
 	default:
 		return fmt.Errorf("Message from %s had an invalid type code: %s", conn.RemoteAddr().String(), msg.GetType().String())
@@ -121,7 +121,6 @@ func (listener *LocalListener) handleChunkRequest(conn net.Conn, msg *torr.Chunk
 		respStatus = torr.Status_SUCCESS
 	}
 
-	respStatus = torr.Status_SUCCESS
 	return sendResponse(conn, prepareChunkResponse(respStatus, errorMessage, chunk))
 }
 
@@ -198,7 +197,8 @@ func (listener *LocalListener) handleReplicateRequest(conn net.Conn, msg *torr.R
 	results, err := listener.service.Replicate(
 		hash,
 		msg.GetFileInfo().GetFilename(),
-		int64(msg.GetFileInfo().GetSize()))
+		int64(msg.GetFileInfo().GetSize()),
+		msg.GetSubnetId())
 	if err != nil {
 		serviceError := err.(*service.ServiceError)
 		if serviceError.IsFilenameInvalid {
@@ -209,6 +209,7 @@ func (listener *LocalListener) handleReplicateRequest(conn net.Conn, msg *torr.R
 			response = prepareReplicateResponse(torr.Status_PROCESSING_ERROR, serviceError.Error(), nil)
 		}
 	} else {
+		fmt.Println("Successfully replicated ", msg.GetFileInfo().GetFilename())
 		response = prepareReplicateResponse(torr.Status_SUCCESS, "", results)
 	}
 
@@ -263,7 +264,7 @@ func (listener *LocalListener) handleDownloadRequest(conn net.Conn, msg *torr.Do
 
 func (listener *LocalListener) handleSearchRequest(conn net.Conn, msg *torr.SearchRequest) error {
 	var response *torr.Message
-	results, err := listener.service.Search(msg.GetRegex())
+	results, err := listener.service.Search(msg.GetRegex(), msg.GetSubnetId())
 	if err != nil {
 		serviceError := err.(*service.ServiceError)
 		if serviceError.IsRegexFailure {
@@ -314,17 +315,19 @@ func prepareNodeSearchResults(results []*service.NodeSearchResult) []*torr.NodeS
 
 func prepareNodeSearchResult(result *service.NodeSearchResult) *torr.NodeSearchResult {
 	return &torr.NodeSearchResult{
-		Node:         prepareNodeMessage(result.Host, result.Port),
+		Node:         prepareNodeMessage(result.Host, result.Port, result.Name, result.Index),
 		Status:       result.TorrStatus,
 		ErrorMessage: result.ErrorMessage,
 		Files:        result.FoundFiles,
 	}
 }
 
-func prepareNodeMessage(host string, port uint32) *torr.Node {
-	return &torr.Node{
-		Host: host,
-		Port: int32(port),
+func prepareNodeMessage(host string, port uint32, name string, index uint32) *torr.NodeId {
+	return &torr.NodeId{
+		Host:  host,
+		Port:  int32(port),
+		Owner: name,
+		Index: int32(index),
 	}
 }
 
@@ -338,7 +341,7 @@ func prepareNodeReplicationStatuses(results []*service.NodeReplicationAttempt) [
 
 func prepareNodeReplicationStatus(status *service.NodeReplicationAttempt) *torr.NodeReplicationStatus {
 	return &torr.NodeReplicationStatus{
-		Node:         prepareNodeMessage(status.Host, status.Port),
+		Node:         prepareNodeMessage(status.Host, status.Port, status.Name, status.Index),
 		ChunkIndex:   status.ChunkIndex,
 		Status:       status.TorrStatus,
 		ErrorMessage: status.ErrorMessage,
