@@ -25,7 +25,7 @@ func MakeLocalListener(port uint16, service *service.TorrentService) *LocalListe
 }
 
 func (listener *LocalListener) Listen() {
-	listeningString := fmt.Sprintf("localhost:%d", listener.port)
+	listeningString := fmt.Sprintf("0.0.0.0:%d", listener.port)
 	fmt.Println("Listening on: ", listeningString)
 	socket, err := net.Listen("tcp", listeningString)
 	if err != nil {

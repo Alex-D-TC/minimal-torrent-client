@@ -12,26 +12,36 @@ import (
 )
 
 func main() {
-	ip := net.ParseIP(os.Args[1])
-	if ip == nil {
+	hubIP := net.ParseIP(os.Args[1])
+	if hubIP == nil {
 		panic("Could not parse ip")
 	}
 
-	port, err := strconv.ParseUint(os.Args[2], 10, 16)
+	hubPort, err := strconv.ParseUint(os.Args[2], 10, 16)
 	if err != nil {
 		panic(err)
 	}
 
-	index, err := strconv.ParseUint(os.Args[3], 10, 16)
+	nodeIP := net.ParseIP(os.Args[3])
+	if nodeIP == nil {
+		panic("Could not parse node IP")
+	}
+
+	port, err := strconv.ParseUint(os.Args[4], 10, 16)
 	if err != nil {
 		panic(err)
 	}
 
-	hubIP := net.ParseIP("127.0.0.1")
-	hubPort := uint16(51234)
-	communicator := commlib.MakeTorrCommunicator(hubIP, hubPort)
+	index, err := strconv.ParseUint(os.Args[5], 10, 16)
+	if err != nil {
+		panic(err)
+	}
+
+	fmt.Println("Connecting to host", hubIP, "on port", hubPort)
+
+	communicator := commlib.MakeTorrCommunicator(hubIP, uint16(hubPort))
 	node := commlib.TorrNode{
-		Host:  net.ParseIP("127.0.0.1"),
+		Host:  nodeIP,
 		Port:  uint16(port),
 		Name:  "Alex",
 		Index: uint16(index),
