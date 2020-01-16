@@ -64,9 +64,9 @@ func writeMessageSize(conn net.Conn, size uint32) error {
 
 func readMessageSize(conn net.Conn) (uint32, error) {
 	sizeBuff := make([]byte, 4)
-	bytesRead, err := conn.Read(sizeBuff)
-	if err != nil && err != io.EOF {
+	err := readAll(conn, sizeBuff)
+	if err != nil {
 		return 0, err
 	}
-	return binary.BigEndian.Uint32(sizeBuff[:bytesRead]), nil
+	return binary.BigEndian.Uint32(sizeBuff), nil
 }
