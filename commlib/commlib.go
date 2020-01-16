@@ -42,8 +42,9 @@ func writeAll(conn net.Conn, buffer []byte) error {
 func readAll(conn net.Conn, buffer []byte) error {
 	gotEOF := false
 	leftToRead := len(buffer)
+	buffSize := len(buffer)
 	for !gotEOF && leftToRead > 0 {
-		readBytes, err := conn.Read(buffer)
+		readBytes, err := conn.Read(buffer[buffSize-leftToRead:])
 		if err != nil && err != io.EOF {
 			fmt.Println("commlib.readAll: Encountered unexpected error ", err)
 			return err
